@@ -1,0 +1,73 @@
+{
+  "capturedAt": "2026-04-29T00:30:07.216Z",
+  "api_base": "http://localhost:3000",
+  "userCount": 2,
+  "wallClockMs": 19231,
+  "sumOfPerUserDurationsMs": 38187,
+  "overlapRatio": 1.9857001715979408,
+  "firstEventStaggerMs": 160,
+  "perUser": [
+    {
+      "userId": "concurrent-1777422587881-u0",
+      "sessionId": "89f2f213-8782-48c9-991c-48eef4daf5ab",
+      "containerId": null,
+      "finalState": "done",
+      "firstEventLatencyMs": 11878,
+      "totalDurationMs": 19231,
+      "eventCount": 4,
+      "eventTypeCounts": {
+        "agent.chunk": 3,
+        "agent.done": 1
+      },
+      "firstEvents": [
+        {
+          "type": "agent.chunk",
+          "t": 11878
+        },
+        {
+          "type": "agent.chunk",
+          "t": 19167
+        },
+        {
+          "type": "agent.chunk",
+          "t": 19167
+        },
+        {
+          "type": "agent.done",
+          "t": 19231
+        }
+      ]
+    },
+    {
+      "userId": "concurrent-1777422587940-u1",
+      "sessionId": "7b3408d9-889d-425e-bf56-0b834b309458",
+      "containerId": null,
+      "finalState": "done",
+      "firstEventLatencyMs": 11718,
+      "totalDurationMs": 18956,
+      "eventCount": 4,
+      "eventTypeCounts": {
+        "agent.chunk": 3,
+        "agent.done": 1
+      },
+      "firstEvents": [
+        {
+          "type": "agent.chunk",
+          "t": 11718
+        },
+        {
+          "type": "agent.chunk",
+          "t": 18637
+        },
+        {
+          "type": "agent.chunk",
+          "t": 18932
+        },
+        {
+          "type": "agent.done",
+          "t": 18956
+        }
+      ]
+    }
+  ]
+}

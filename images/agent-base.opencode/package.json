@@ -1,0 +1,9 @@
+{
+  "name": "zeroclaw-agent-base-opencode",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@opencode-ai/sdk": "^1.14.30"
+  }
+}

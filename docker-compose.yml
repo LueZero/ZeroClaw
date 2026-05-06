@@ -1,0 +1,101 @@
+networks:
+  zeroclaw-net:
+    name: zeroclaw-net
+    external: true
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: zeroclaw-postgres
+    networks: [zeroclaw-net]
+    environment:
+      POSTGRES_DB: zeroclaw
+      POSTGRES_USER: zeroclaw
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-zeroclaw-dev}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zeroclaw -d zeroclaw"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # No profiles: postgres always starts with `docker compose up`
+    # To skip postgres, use: docker compose up api-server web-app
+
+  api-server:
+    build:
+      context: .
+      dockerfile: packages/api-server/Dockerfile
+    image: zeroclaw/api-server:latest
+    container_name: zeroclaw-api
+    networks: [zeroclaw-net]
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      AGENTS_DIR: /workspace/agents
+      GROUPS_FILE: /workspace/groups.yaml
+      SQLITE_PATH: /workspace/data/platform.db
+      DB_DRIVER: ${DB_DRIVER:-postgres}
+      DATABASE_URL: ${DATABASE_URL:-postgres://zeroclaw:zeroclaw-dev@zeroclaw-postgres:5432/zeroclaw}
+      DOCKER_NETWORK: zeroclaw-net
+      HOST_AGENTS_DIR: ${HOST_AGENTS_DIR:-}
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me-please-32chars}
+      LOG_LEVEL: info
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      OPENCODE_AUTH_DIR: ${OPENCODE_AUTH_DIR:-}
+      OPENCODE_MODEL_ID: ${OPENCODE_MODEL_ID:-anthropic/claude-sonnet-4-20250514}
+      OPENCODE_PROVIDER_ID: ${OPENCODE_PROVIDER_ID:-anthropic}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      DISCORD_PUBLIC_KEY: ${DISCORD_PUBLIC_KEY:-}
+      DISCORD_BOT_ID: ${DISCORD_BOT_ID:-}
+      DISCORD_MODE: ${DISCORD_MODE:-webhook}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
+      SLACK_MODE: ${SLACK_MODE:-webhook}
+    volumes:
+      - ./agents:/workspace/agents:ro
+      - ./groups.yaml:/workspace/groups.yaml:ro
+      - ./data:/workspace/data
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  web-app:
+    build:
+      context: .
+      dockerfile: packages/web-app/Dockerfile
+    image: zeroclaw/web-app:latest
+    container_name: zeroclaw-web
+    networks: [zeroclaw-net]
+    ports:
+      - "5173:80"
+    depends_on:
+      - api-server
+
+  # Build-only services — builds the base images then exits immediately
+  # These containers are NOT long-running; they only exist to trigger image build
+  agent-base-opencode-build:
+    build:
+      context: ./images/agent-base.opencode
+    image: zeroclaw/agent-base-opencode:latest
+    entrypoint: ["echo", "image built"]
+    restart: "no"
+    profiles: ["build"]
+
+  agent-base-copilot-build:
+    build:
+      context: ./images/agent-base.copilot
+    image: zeroclaw/agent-base-copilot:latest
+    entrypoint: ["echo", "image built"]
+    restart: "no"
+    profiles: ["build"]

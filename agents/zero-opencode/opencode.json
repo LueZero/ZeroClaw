@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "github-copilot/gpt-5-mini",
+  "agent": {
+    "guide": {
+      "description": "Zeroclaw 快速上手嚮導",
+      "mode": "primary"
+    }
+  },
+  "permission": {
+    "skill": "allow"
+  }
+}

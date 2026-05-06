@@ -1,0 +1,40 @@
+version: 1
+
+groups:
+  - id: zero-opencode
+    displayName: Zero (Opencode)
+    description: Zeroclaw 快速上手嚮導 — Opencode SDK 版
+    icon: "🧭"
+    enabled: true
+    agents:
+      - zero-opencode
+    defaultAgent: zero-opencode
+    container:
+      baseImage: zeroclaw/agent-base-opencode:latest
+      maxSessions: 50
+      mountAgentsDir: true
+      resources:
+        cpus: "1.0"
+        memory: 512m
+    routing:
+      mode: explicit
+      fallback: zero-opencode
+
+  - id: zero-copilot
+    displayName: Zero (Copilot)
+    description: Zeroclaw 快速上手嚮導 — Copilot SDK 版
+    icon: "🚀"
+    enabled: true
+    agents:
+      - zero-copilot
+    defaultAgent: zero-copilot
+    container:
+      baseImage: zeroclaw/agent-base-copilot:latest
+      maxSessions: 30
+      mountAgentsDir: true
+      resources:
+        cpus: "2.0"
+        memory: 1g
+    routing:
+      mode: explicit
+      fallback: zero-copilot

@@ -1,0 +1,11 @@
+{
+  "name": "zeroclaw-agent-base-copilot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@github/copilot-sdk": "^0.1.8",
+    "@github/copilot": "^1.0.36-0",
+    "zod": "^3.23.0"
+  }
+}

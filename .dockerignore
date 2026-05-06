@@ -1,0 +1,15 @@
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/.turbo
+**/coverage
+**/.env
+**/.env.local
+**/data
+**/*.sqlite
+**/*.sqlite-journal
+.git
+.gitignore
+.vscode
+.DS_Store
+*.log
