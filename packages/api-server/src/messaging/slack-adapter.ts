@@ -121,6 +121,25 @@ export function createSlackAdapter(opts: SlackAdapterOptions): MessagingAdapter 
         body: JSON.stringify(body),
       });
     },
+
+    async openDM(userHandle: string): Promise<string> {
+      const res = await fetchFn(`${apiBase}/conversations.open`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          authorization: `Bearer ${opts.botToken}`,
+        },
+        body: JSON.stringify({ users: userHandle }),
+      });
+      if (!res.ok) {
+        throw new Error(`Slack openDM failed: ${res.status} ${await res.text()}`);
+      }
+      const data = (await res.json()) as { ok: boolean; channel?: { id: string }; error?: string };
+      if (!data.ok || !data.channel) {
+        throw new Error(`Slack openDM error: ${data.error ?? 'unknown'}`);
+      }
+      return data.channel.id;
+    },
   };
 }
 

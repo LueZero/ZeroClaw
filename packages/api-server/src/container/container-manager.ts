@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ContainerManager ??蝞∠? Docker 摰孵??望?
  *
  * v0.3: 銝??(group ? agent) ??**?臭?銝??* ?曹澈摰孵??
@@ -8,7 +8,9 @@
  */
 
 import Docker from 'dockerode';
-import { resolve, basename } from 'node:path';
+import { resolve, basename, join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { readdir, readFile } from 'node:fs/promises';
 import type { Logger } from 'pino';
 import { Errors } from '@zeroclaw/shared';
 import type {
@@ -59,6 +61,8 @@ export interface ContainerManager {
   adoptFromDb(): Promise<void>;
   /** 閮 unhealthy ? */
   onUnhealthy(handler: (cid: string, groupId: string, agentId: string) => void): void;
+  /** 強制重新 build agent image 並重啟所有使用該 image 的容器 (T-6) */
+  rebuildImage(agent: AgentMetadata, group: GroupConfig): Promise<void>;
   /** ????皞?*/
   dispose(): Promise<void>;
 }
@@ -272,16 +276,46 @@ export function createContainerManager(
 
   const builtImages = new Set<string>();
 
+  /** Recursively hash all files in a directory to produce a content-based cache key (T-5) */
+  async function computeContextHash(dir: string): Promise<string> {
+    const hash = createHash('sha256');
+    const entries: string[] = [];
+
+    async function walk(d: string): Promise<void> {
+      const items = await readdir(d, { withFileTypes: true });
+      for (const item of items) {
+        const full = join(d, item.name);
+        if (item.isDirectory()) {
+          await walk(full);
+        } else if (item.isFile()) {
+          entries.push(full);
+        }
+      }
+    }
+    await walk(dir);
+    entries.sort(); // deterministic order
+    for (const filePath of entries) {
+      const rel = filePath.slice(dir.length); // relative path as part of hash
+      hash.update(rel);
+      const content = await readFile(filePath);
+      hash.update(content);
+    }
+    return hash.digest('hex').slice(0, 12);
+  }
+
   async function ensureAgentImage(group: GroupConfig, agent: AgentMetadata): Promise<string> {
     if (!agent.hasCustomDockerfile) return group.container.baseImage;
-    const tag = `zeroclaw/agent-${agent.id}:latest`;
+
+    const contextPath = resolve(agentsDir, agent.id);
+    const contentHash = await computeContextHash(contextPath);
+    const tag = `zeroclaw/agent-${agent.id}:${contentHash}`;
+
     if (builtImages.has(tag)) return tag;
 
     const existing = await docker.listImages({ filters: { reference: [tag] } });
     if (existing.length > 0) { builtImages.add(tag); return tag; }
 
-    const contextPath = resolve(agentsDir, agent.id);
-    logger.info({ tag, agent: agent.id, context: contextPath }, 'Building custom agent image');
+    logger.info({ tag, agent: agent.id, context: contextPath, contentHash }, 'Building custom agent image (content hash miss)');
 
     try {
       const stream = await docker.buildImage(
@@ -459,6 +493,34 @@ export function createContainerManager(
     }
   }
 
+  async function rebuildImage(agent: AgentMetadata, group: GroupConfig): Promise<void> {
+    // Clear all cached tags for this agent (content hash may vary)
+    const prefix = `zeroclaw/agent-${agent.id}:`;
+    for (const tag of builtImages) {
+      if (tag.startsWith(prefix)) builtImages.delete(tag);
+    }
+    // Force remove old images matching this agent (ignore errors if in use)
+    if (agent.hasCustomDockerfile) {
+      try {
+        const images = await docker.listImages({ filters: { reference: [`${prefix}*`] } });
+        for (const img of images) {
+          try { await docker.getImage(img.Id).remove({ force: true }); } catch { /* in use */ }
+        }
+      } catch (e) {
+        logger.warn({ err: e, agent: agent.id }, 'Failed to remove old agent images');
+      }
+    }
+    // Re-build (will compute new content hash)
+    await ensureAgentImage(group, agent);
+    // Restart all containers using this agent
+    const key = keyOf(group.id, agent.id);
+    const entry = containers.get(key);
+    if (entry) {
+      logger.info({ containerId: entry.instance.containerId, agent: agent.id }, 'Restarting container after image rebuild');
+      await restart(entry.instance.containerId, group, agent);
+    }
+  }
+
   async function dispose(): Promise<void> {
     if (gcTimer) clearInterval(gcTimer);
     if (healthTimer) clearInterval(healthTimer);
@@ -480,6 +542,7 @@ export function createContainerManager(
     invalidate: invalidateInternal,
     adoptFromDb,
     onUnhealthy(handler) { unhealthyHandler = handler; },
+    rebuildImage,
     dispose,
   };
 }

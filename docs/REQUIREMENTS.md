@@ -1,6 +1,6 @@
 # ZeroClaw — 需求與實作狀態總覽
 
-> 版本：v0.4.4（2026-05-02）
+> 版本：v0.5.0（2026-05-07）
 > 對應文件：[ARCHITECTURE.md](ARCHITECTURE.md)、[DESIGN.md](DESIGN.md)
 > 本文件為唯一需求來源，合併自原 `TODO.md` 與 `SPEC-multi-session-multiplex.md`（兩者已刪除）。
 
@@ -34,13 +34,18 @@
 | [21. 受影響檔案](#21-受影響檔案) | 各檔案改動摘要（19 個檔案）| |
 | [22. 驗收](#22-驗收) | G1~G5 驗收條件 ✅ / ❌ | |
 | [23. 開放議題](#23-開放議題) | O-2~O-5 未決議項目 | |
-| [24. 未實作需求詳細說明](#24-未實作需求詳細說明) | T-5~T-32 待辦詳細說明 | |
+| [24. 未實作需求詳細說明](#24-未實作需求詳細說明) | T-5~T-32 詳細說明（含已完成項） | |
 | [25. 已完成需求技術細節](#25-已完成需求技術細節) | T-1~T-11 完成後記錄 | |
 
 ---
 
 ## 變更紀錄
 
+- **v0.5.0**（2026-05-07）：
+  - **T-5 Image build cache content hash**：`ensureAgentImage` 改用 `computeContextHash(contextDir)` 計算 agent 目錄所有檔案的 SHA-256 hash（前 12 字元作 tag）；tag 格式從 `zeroclaw/agent-{id}:latest` 改為 `zeroclaw/agent-{id}:{hash}`；Docker daemon 有對應 image → 跳過 build；檔案內容變更 → 自動 rebuild。
+  - **T-6 Rebuild API**：新增 `POST /api/admin/agents/:agentId/rebuild`（admin only）；清除 `builtImages` 快取 + 刪除舊 image + 重新 build + 重啟所有使用該 agent 的容器。`ContainerManager` 新增 `rebuildImage(agent, group)` 方法。
+  - **T-32 Discord Gateway WSS**：Discord adapter 新增 Gateway 模式（`DISCORD_MODE=gateway`）；實作完整 IDENTIFY / HEARTBEAT / DISPATCH / RESUME / RECONNECT 流程；使用 Node.js 22 原生 `WebSocket`（不需額外套件）；指數退避重連（1s→2s→…→60s）；READY 事件自動取得 bot user ID。
+  - **openDM 三平台實作**（§3.8）：Discord `POST /users/@me/channels { recipient_id }`；Slack `conversations.open { users }`；Teams `POST /v3/conversations { bot, members }`。
 - **v0.4.4**（2026-05-02）：
   - **修正 `POST /api/admin/messaging-groups` 未 auto-seed wiring 的問題**（T-20 補完）：透過 Admin Web UI 手動新增 Messaging Group 時，REST endpoint 現在同樣自動 seed 預設 wiring（邏輯與 `message-processor.ts` 首次 @bot 路徑完全對齊）。平台為 `discord`/`slack`/`teams` 且 `isGroup=true` → `mention-sticky`；其餘 → `pattern '.'`；`sessionMode=per-user`、`ignoredMessagePolicy=accumulate`。
 - **v0.4.3**（2026-05-02）：
@@ -128,6 +133,8 @@
 | T-21 | Web UI 「群組」欄位文案釐清 | ✅ | v0.4.1 | MessagingGroupsPage 改顯示「代理人群組 (Agent Group)」+ tooltip；ARCHITECTURE.md §4.7 補術語澄清 |
 | T-22 | Agent 自訂 Dockerfile 擴充文件化 | ✅ | v0.4.1 | ARCHITECTURE.md §5.3 新增說明：實作早已存在（`agent.hasCustomDockerfile` + `ensureAgentImage`），僅補文件 |
 | T-23 | 動態 Group 設定 Override（Web UI 可改 9 個欄位） | ✅ | v0.4.2~0.4.3 | `group_overrides` 表（SQLite + PG 雙驅動）+ `DbStore.{listGroupOverrides,getGroupOverride,upsertGroupOverride,deleteGroupOverride}` + `groups-loader` merge 邏輯與 `reload()` + Admin API GET/PATCH/DELETE `/api/admin/groups` + Web UI `/admin/groups` master-detail 頁面。**可 override**：`displayName` / `description` / `icon` / `enabled` / `defaultAgent` / `maxSessions` / `routingMode` / `routingFallback` / `routingAutoClassifierModel`。**yaml-only（唯讀顯示）**：`agents[]` / `baseImage` / `mountAgentsDir` / `resources.*` / `env` / `volumes` |
+| T-5 | Image build cache content hash | ✅ | v0.5.0 | `computeContextHash` 遞迴 hash agent 目錄所有檔案（SHA-256 前 12 字元作 tag）；Docker daemon 有對應 image → 跳過 build |
+| T-6 | Rebuild API | ✅ | v0.5.0 | `POST /api/admin/agents/:agentId/rebuild`（admin only）；清除快取 + 刪除舊 image + 重新 build + 重啟容器 |
 
 ### 2.2 平台串接（部分完成）
 
@@ -138,9 +145,9 @@
 | §3.5 | Slack adapter (webhook) | ✅ | v0.3 | `thread_ts → threadId`、`app_mention` → `isMention` |
 | §3.5 | Discord adapter (webhook) | ✅ | v0.3 | `mentions` → `isMention`、thread/channel id |
 | §3.5 | Teams adapter | ✅ | v0.3 | `entities[].mentioned` → `isMention`、`conversation.id` → `threadId` |
-| T-32 | Discord Gateway WSS | ❌ | — | WSS `wss://gateway.discord.gg`，免公開 URL。`DISCORD_MODE=gateway\|webhook` env 控制 |
+| T-32 | Discord Gateway WSS | ✅ | v0.5.0 | WSS `wss://gateway.discord.gg`；IDENTIFY / HEARTBEAT / RESUME / RECONNECT 完整實作；`DISCORD_MODE=gateway\|webhook` env 控制 |
 | §3.7 | Slack Socket Mode | ❌ | — | WSS Socket Mode，需 `xapp-…` app-level token |
-| §3.8 | openDM (Discord/Slack/Teams) | ❌ | — | `MessagingAdapter.openDM?()` 介面已宣告；實際 adapter 尚未實作 |
+| §3.8 | openDM (Discord/Slack/Teams) | ✅ | v0.5.0 | Discord: `POST /users/@me/channels`；Slack: `conversations.open`；Teams: `POST /v3/conversations` |
 
 ### 2.3 Admin / API（部分完成）
 
@@ -149,15 +156,15 @@
 | §9 | messaging-groups CRUD API | ✅ | v0.3 | `GET/POST/DELETE /api/admin/messaging-groups`、wiring `GET/POST/PATCH/DELETE` |
 | §13 | Web UI messaging-groups 管理頁 | ✅ | v0.3 | MessagingGroupsPage：群組列表、wiring CRUD、pairing code 產生、封鎖/解封 |
 | §16.2 | `/agents` `/agent` 指令 | ✅ | v0.3 | message-processor 攔截保留指令，列出/切換/關閉全收 agent |
-| T-6 | Rebuild API | ❌ | — | `POST /api/admin/agents/:id/rebuild` 強制 rebuild image + 重啟容器 |
-| T-8 | 完整管理 API | ❌ | — | restart / rebuild / PUT groups 線上改 yaml + 熱重載 |
+| T-6 | Rebuild API | ✅ | v0.5.0 | `POST /api/admin/agents/:agentId/rebuild` 強制 rebuild image + 重啟容器 |
+| T-8 | 完整管理 API | ❌ | — | restart / PUT groups 線上改 yaml + 熱重載 |
 
 ### 2.4 尚未實作
 
 | ID | 需求 | 優先級 | 說明 |
 |----|------|--------|------|
-| T-5 | Image build cache content hash | 🟡 中 | tag = `sha256(Dockerfile + agent dir)`；命中即跳過 build |
 | T-7 | 跨平台帳號綁定 (user 層) | 🟡 中 | `POST /api/users/me/bind { platform, externalId }` + verification flow |
+| T-8 | 完整管理 API | 🟡 中 | restart / rebuild / PUT groups 線上改 yaml + 熱重載 |
 | T-9 | Partial assistant message 落盤 | 🟡 中 | 每 N 個 chunk 或 5 秒 upsert 部分內容，避免中途錯誤丟整段 |
 | T-12 | OAuth / SSO | 🟢 低 | 取代 dev-login；GitHub / Google OIDC |
 | T-13 | 容器 metrics / Prometheus | 🟢 低 | `/metrics` endpoint |
@@ -952,8 +959,8 @@ async function replayHistoryToSession(
 - [x] **G2-a**：admin 在 same chat 加 wiring(agentA, mention) + wiring(agentB, pattern='^/dev') → user 打 `@bot` 兩個都收（mention 命中）；user 打 `/dev x` 只 agentB 收
 - [x] **G2-b**：mention-sticky thread → 第二訊息（無 mention）仍由原 agent 接
 - [x] **G3-a**：Telegram private chat → isGroup=false / threadId=null；Slack thread → threadId 帶；Discord thread → threadId 帶
-- [ ] **G3-b**：Discord 設定 `DISCORD_MODE=gateway` + bot token 後，無公開 URL 也能收訊息 ❌ Gateway 尚未實作
-- [ ] **G3-c**：admin 呼叫 `POST /api/admin/messaging-groups/:mgId/open-dm` 對 Discord 使用者 → 收到 bot DM ❌ openDM 尚未實作
+- [x] **G3-b**：Discord 設定 `DISCORD_MODE=gateway` + bot token 後，無公開 URL 也能收訊息 ✅ v0.5.0
+- [x] **G3-c**：admin 呼叫 `POST /api/admin/messaging-groups/:mgId/open-dm` 對 Discord 使用者 → 收到 bot DM ✅ v0.5.0
 - [x] **G4-a**：`/api/bindings` 端點 404；`chat_bindings` 表已 DROP
 - [x] **G4-b**：`groups.yaml` 內 `channels:` 欄位被 schema 拒絕（unknown key）
 - [x] **G5**：admin 在 Web UI 新增 wiring → 立即生效（不需要 API server reload）
@@ -981,12 +988,11 @@ async function replayHistoryToSession(
 
 ### 🟡 中優先 — 完整度
 
-#### T-5 Image build cache 用 content hash
-- 現況：`builtImages` 只記憶體內 Set；改 Dockerfile 不會自動 rebuild。
-- 方案：tag = `sha256(Dockerfile + agent dir tree)`；本地查 `docker.listImages()` 命中即跳過 build。
+#### T-5 Image build cache 用 content hash ✅（v0.5.0 已完成）
+- `computeContextHash` 遞迴 hash agent 目錄所有檔案（SHA-256 前 12 字元）；tag 格式 `zeroclaw/agent-{id}:{hash}`；Docker daemon 有對應 image → 跳過 build。
 
-#### T-6 Rebuild API
-- `POST /api/admin/agents/:id/rebuild` 強制 rebuild image + 重啟對應容器。
+#### T-6 Rebuild API ✅（v0.5.0 已完成）
+- `POST /api/admin/agents/:agentId/rebuild`（admin only）；清除 builtImages 快取 + 刪除舊 image + 重新 build + 重啟所有使用該 agent 的容器。
 
 #### T-7 跨平台帳號綁定
 - 現況：`users.external_ids` JSON 欄位已存在，但 webhook 進來只會自動建匿名 user。
@@ -995,18 +1001,16 @@ async function replayHistoryToSession(
 
 #### T-8 完整管理 API
 - `POST /api/admin/containers/:id/restart`
-- `POST /api/admin/containers/:id/rebuild`
 - `PUT /api/admin/groups`（線上改 yaml + 熱重載）
 
 #### T-9 partial assistant message 落盤
 - 現況：`SessionManager.handleMessage` 只在 `done` 事件 flush assistant message；中途錯誤會丟整段。
 - 方案：每 N 個 chunk 或每 5 秒 upsert 一次部分內容。
 
-#### T-32 Discord Gateway WebSocket 模式
-- 現況：Discord 走 webhook（Interactions endpoint），需要公開 URL。
-- 對齊 nanoclaw：改用 Gateway WSS（`wss://gateway.discord.gg`），免公開 URL，與 Telegram polling 體驗一致。
-- 實作：`discord-adapter.ts` 加 `start()`，建立 WS、處理 IDENTIFY / HEARTBEAT / DISPATCH，DISPATCH 內 MESSAGE_CREATE 事件透過 `runtime.onMessages()` 餵進共用 processor。Webhook 模式同步保留以利公開部署選擇。
-- 切換以 `DISCORD_MODE=gateway|webhook` 控制（env 已定義），預設 `webhook`。
+#### T-32 Discord Gateway WebSocket 模式 ✅（v0.5.0 已完成）
+- 完整實作 Gateway WSS：IDENTIFY / HEARTBEAT / DISPATCH(MESSAGE_CREATE) / RESUME / RECONNECT。
+- 使用 Node.js 22 原生 `WebSocket`；指數退避重連（1s→60s max）；READY 自動取得 bot ID。
+- `DISCORD_MODE=gateway|webhook` env 控制，webhook 模式保留不變。
 
 ### 🟢 低優先 — 增強
 

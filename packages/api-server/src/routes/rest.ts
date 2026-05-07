@@ -468,6 +468,31 @@ export async function registerRoutes(
     return deps.containers.list();
   });
 
+  // ── T-6: 強制 rebuild agent image + 重啟容器 ──
+  app.post('/api/admin/agents/:agentId/rebuild', async (req, reply) => {
+    const ctx = await requireAuth(req);
+    requireAdmin(ctx);
+    const { agentId } = req.params as { agentId: string };
+    const agent = deps.agents.tryGet(agentId);
+    if (!agent) throw Errors.agentNotFound(agentId);
+
+    // 找到該 agent 所屬的 group（可能屬於多個 group，全部 rebuild）
+    const allGroups = deps.groups.list();
+    const matchedGroups = allGroups.filter((g) => g.agents.includes(agentId));
+    if (matchedGroups.length === 0) throw Errors.notFound('group containing agent', agentId);
+
+    const results: Array<{ groupId: string; status: string }> = [];
+    for (const group of matchedGroups) {
+      try {
+        await deps.containers.rebuildImage(agent, group);
+        results.push({ groupId: group.id, status: 'ok' });
+      } catch (err) {
+        results.push({ groupId: group.id, status: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return reply.status(200).send({ agentId, results });
+  });
+
   /**
    * 對話完整性診斷報表（admin only）
    *

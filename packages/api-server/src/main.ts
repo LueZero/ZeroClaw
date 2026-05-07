@@ -121,6 +121,7 @@ export async function buildApp() {
         publicKey: env.DISCORD_PUBLIC_KEY,
         appId: env.DISCORD_APP_ID,
         botId: env.DISCORD_BOT_ID,
+        mode: env.DISCORD_MODE,
       }),
     );
     logger.info({ mode: env.DISCORD_MODE }, 'Discord adapter registered');

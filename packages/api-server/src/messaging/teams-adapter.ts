@@ -137,6 +137,38 @@ export function createTeamsAdapter(opts: TeamsAdapterOptions): MessagingAdapter 
         body: JSON.stringify(body),
       });
     },
+
+    async openDM(userHandle: string): Promise<string> {
+      // Find a serviceUrl from any existing conversation (Teams requires serviceUrl for API calls)
+      const anyConv = conversations.values().next().value as TeamsConversationInfo | undefined;
+      if (!anyConv) {
+        throw new Error('Teams openDM requires at least one prior conversation to obtain serviceUrl');
+      }
+      const token = await getAccessToken();
+      const res = await fetchFn(`${anyConv.serviceUrl}/v3/conversations`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          bot: { id: opts.appId },
+          members: [{ id: userHandle }],
+          channelData: { tenant: { id: tenant } },
+          isGroup: false,
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`Teams openDM failed: ${res.status} ${await res.text()}`);
+      }
+      const data = (await res.json()) as { id: string };
+      // Cache the new conversation info
+      conversations.set(data.id, {
+        serviceUrl: anyConv.serviceUrl,
+        conversationId: data.id,
+      });
+      return data.id;
+    },
   };
 }
 

@@ -1,7 +1,7 @@
 # ZeroClaw 架構說明
 
-> 版本：0.4.4
-> 日期：2026-05-02
+> 版本：0.5.0
+> 日期：2026-05-07
 >
 > 本文件是 [DESIGN.md](DESIGN.md) 的**實作對應版**：以「資料流 + 檔案地圖 + 對應關係」說明目前 codebase 的實際組成，不重述設計動機。
 
@@ -414,12 +414,12 @@ entry.instance.status === 'unhealthy'                  → 健康檢查失敗 3 
 | **Telegram** | polling（預設）/ webhook | `adapter.start()` 跑 `getUpdates` 迴圈／`POST /webhooks/telegram` | polling 否；webhook 是 |
 | **WhatsApp** | webhook | `POST /webhooks/whatsapp`（GET 走 `verifyWebhook` 回 challenge） | 是 |
 | **Slack** | webhook | `POST /webhooks/slack`（首次 `url_verification` 回 challenge） | 是 |
-| **Discord** | webhook（Interactions endpoint） | `POST /webhooks/discord` | 是 |
+| **Discord** | webhook（預設）/ **gateway** | `POST /webhooks/discord`（webhook）；`adapter.start()` WSS 連線（gateway） | webhook 是；gateway 否 |
 | **Teams** | webhook | `POST /webhooks/teams`（Bot Framework Activity） | 是 |
 
 `MessagingAdapter` 的 `start?(runtime)` / `stop?()` 為可選方法：webhook 模式 adapter 不實作；polling/gateway 模式 adapter 在 `start()` 內維持迴圈或長連線，收到訊息後透過 `runtime.onMessages()` 餵進共用的 [`message-processor.ts`](../packages/api-server/src/messaging/message-processor.ts)，**不論 polling 或 webhook，路由邏輯只有一份**（找 group → 建 session → 跑 agent loop → `adapter.send()` 回送）。
 
-> **TODO**：Discord 在 nanoclaw 是 Gateway WebSocket（`wss://gateway.discord.gg`），可避免公開 URL；目前 zeroclaw 仍使用 webhook，列為後續強化項。Slack/Teams/WhatsApp 平台官方 API 沒有等價的 long-polling 機制，維持 webhook 設計。
+> **v0.5.0**：Discord Gateway WSS（`wss://gateway.discord.gg`）已實作，設定 `DISCORD_MODE=gateway` 即可避免公開 URL。Gateway 模式下使用 Node.js 22 原生 `WebSocket`，支援 IDENTIFY / RESUME / Heartbeat 自動重連（指數退避 1s→60s）。Slack/Teams/WhatsApp 平台官方 API 沒有等價的 long-polling 機制，維持 webhook 設計。
 
 ### 4.6 互動式 Pairing 與 MessagingGroup（v0.3）
 
@@ -645,7 +645,7 @@ zeroclaw-{groupId}-{agentId}
 | 情境 | image tag | 來源 |
 |---|---|---|
 | 純 base image 模式（`agent.hasCustomDockerfile=false`） | `group.container.baseImage`（如 `zeroclaw/agent-base-opencode:latest`） | `images/agent-base.opencode/` 或 `images/agent-base.copilot/` 預先 build |
-| Agent 自訂擴充（`agent.hasCustomDockerfile=true`） | `zeroclaw/agent-{agentId}:latest` | `agent-detector` 偵測 `agents/<id>/Dockerfile` → `ContainerManager.ensureAgentImage` 首次需要時 `docker build` 該目錄 → 結果快取於 `builtImages` Set |
+| Agent 自訂擴充（`agent.hasCustomDockerfile=true`） | `zeroclaw/agent-{agentId}:{contentHash}` | `agent-detector` 偵測 `agents/<id>/Dockerfile` → `ContainerManager.ensureAgentImage` 計算目錄內容 SHA-256 hash（前 12 hex）作為 tag → 若 `builtImages` 未命中且 `docker images` 不存在才 build → 內容異動自動觸發 rebuild |
 
 #### Agent 自訂映像擴充
 
@@ -665,10 +665,11 @@ ENV PATH=/opt/agent-tools:$PATH
 1. `agent-detector` 啟動時掃描 `agents/<id>/`，發現 `Dockerfile` → `agent.hasCustomDockerfile=true`
 2. `ContainerManager.acquire()` → `ensureAgentImage(group, agent)`：
    - `hasCustomDockerfile=false` → 直接回傳 `group.container.baseImage`
-   - `hasCustomDockerfile=true` → 計算 tag `zeroclaw/agent-{agentId}:latest` → 若 `builtImages` 未命中且 `docker images` 不存在 → `docker build agents/<id>/`
+   - `hasCustomDockerfile=true` → `computeContextHash(agents/<id>/)` 遞迴 hash 所有檔案 → tag `zeroclaw/agent-{agentId}:{hash}` → 若 `builtImages` 未命中且 `docker images` 不存在 → `docker build agents/<id>/`
 3. 容器仍然命名為 `zeroclaw-{groupId}-{agentId}`，只是底層 image 不同
+4. **手動重建**：`POST /api/admin/agents/:agentId/rebuild`（T-6）→ 清除 builtImages 快取、移除舊映像、重新 build + 重啟容器
 
-> ⚠️ 目前 image build 沒有 content hash cache（[REQUIREMENTS.md](REQUIREMENTS.md) T-5）：修改 `Dockerfile` 後 `builtImages` set 仍可能視為 hit，需手動 `docker rmi` 或重啟 API server 觸發 rebuild；後續會補 content hash 自動失效。
+> ✅ v0.5.0：已實作 content hash cache（T-5）— 修改 `Dockerfile` 或任何 agent 目錄內檔案後，下次 `acquire()` 會自動偵測 hash 變化並重新 build。另有 `POST /api/admin/agents/:agentId/rebuild`（T-6）可手動觸發強制重建。
 
 ---
 
@@ -814,9 +815,7 @@ ENV PATH=/opt/agent-tools:$PATH
 - 跨平台帳號綁定流程（schema 已預留 `users.external_ids`）
 - UI i18n
 - MessagingAdapter 動態 plugin 機制
-- Dockerfile build cache hash 策略（內容 hash vs git commit hash）
-- Discord Gateway WSS / Slack Socket Mode（T-32）
-- openDM adapter 實作（Discord / Slack / Teams）
+- Slack Socket Mode（T-32 部分；Discord Gateway 已完成）
 
 ---
 
@@ -827,9 +826,7 @@ ENV PATH=/opt/agent-tools:$PATH
 | Copilot quota（premium_interactions 0/300）會回 402 | 無法直接用 Copilot API | 設定 `OPENAI_API_KEY` + `BYOK_BASE_URL` 走 BYOK |
 | Node stdout 在非 TTY fully-buffered | docker logs 看不到 chat 過程 | 已用 `setBlocking(true)` 修正 |
 | `messages.tool_calls` 永遠 NULL | 工具軌跡不入庫 | 設計上不記錄；觀測由 WS 即時取 |
-| Discord Gateway WSS 尚未實作 | Discord 仍需公開 URL（webhook 模式） | 列為 T-32 待實作 |
 | Slack Socket Mode 尚未實作 | Slack 仍需公開 URL（webhook 模式） | 列為 T-32 待實作 |
-| openDM adapter 實作缺 | Discord/Slack/Teams 無法主動發起 DM | 介面已宣告，adapter 內實作待補 |
 
 > 以下項目已完成，不再列為限制：
 > - ✅ 對話歷史 Replay（T-1，v0.4）：`AgentProvider.injectHistory()` 在容器遷移/重啟時自動回放最近 50 筆訊息
@@ -837,6 +834,10 @@ ENV PATH=/opt/agent-tools:$PATH
 > - ✅ ContainerPool 持久化（T-4，v0.3）：`containers` 表 + `adoptFromDb()` 交叉比對 docker ps
 > - ✅ PostgreSQL 完整實作（T-11，v0.3）：`DB_DRIVER=postgres` 預設，`pg.Pool` 驅動，`DbStore` 全面 async
 > - ✅ Session 生命週期限制（T-3，v0.3/v0.4）：idle timeout、message limit、retention days；ended session 收到新訊息時自動 reopen（容器重啟 + history replay），只有 error 狀態不可恢復
+> - ✅ Image build content hash cache（T-5，v0.5）：`computeContextHash` 遞迴 SHA-256；tag 含 12 hex hash，自動失效
+> - ✅ Agent rebuild API（T-6，v0.5）：`POST /api/admin/agents/:agentId/rebuild`
+> - ✅ Discord Gateway WSS（T-32，v0.5）：`DISCORD_MODE=gateway` 啟用 WebSocket 連線
+> - ✅ openDM adapter（v0.5）：Discord / Slack / Teams 三平台 `openDM()` 實作完成
 
 ---
 
@@ -912,6 +913,7 @@ ENV PATH=/opt/agent-tools:$PATH
 | `POST` | `/api/admin/messaging-groups/:mgId/wirings` | admin | 新增 wiring |
 | `PATCH` | `/api/admin/messaging-groups/:mgId/wirings/:g/:a` | admin | 更新 wiring |
 | `DELETE` | `/api/admin/messaging-groups/:mgId/wirings/:g/:a` | admin | 刪除 wiring |
+| `POST` | `/api/admin/agents/:agentId/rebuild` | admin | 強制重建 agent image 並重啟容器（T-6） |
 | `POST` | `/api/admin/messaging-groups/:mgId/open-dm` | admin | 主動對平台使用者開 DM |
 | `POST` | `/api/pairings` | admin | 產生 4 位數 pairing code |
 | `POST` | `/webhook/telegram` | — | Telegram webhook 進入點 |
@@ -945,6 +947,7 @@ ENV PATH=/opt/agent-tools:$PATH
 | `WHATSAPP_APP_SECRET` | — | WhatsApp 用 | HMAC-SHA256 簽章驗證 secret | §4.5 |
 | `DISCORD_BOT_TOKEN` | — | Discord 用 | Discord Bot token | §4.5 |
 | `DISCORD_PUBLIC_KEY` | — | Discord 用 | Ed25519 簽章驗證 public key | §4.5 |
+| `DISCORD_MODE` | `webhook` | — | `webhook`（預設）或 `gateway`（WSS 長連線，免公開 URL） | §4.5 |
 | `SLACK_BOT_TOKEN` | — | Slack 用 | `xoxb-…` Bot OAuth token | §4.5 |
 | `SLACK_SIGNING_SECRET` | — | Slack 用 | HMAC-SHA256 簽章驗證 secret | §4.5 |
 | `TEAMS_APP_ID` | — | Teams 用 | Azure Bot Application ID | §4.5 |
