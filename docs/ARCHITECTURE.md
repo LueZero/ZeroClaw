@@ -76,10 +76,7 @@
                        │ └─────┬──────────────────────────────────┘   │
                        │       ▼                                      │
                        │  /workspace/agent   (RO bind: agents/<id>/)  │
-                       │  /workspace/agents  (RW bind: agents/)  ⁽¹⁾  │
                        └──────────────────────────────────────────────┘
-
-⁽¹⁾ 僅 `mountAgentsDir: true` 的 group 才會掛載 `/workspace/agents`（可寫）。
 ```
 
 ---
@@ -133,7 +130,8 @@ packages/api-server/src/
 │   └── stubs.ts                     # 測試用空實作
 └── routes/
     ├── rest.ts                      # REST：/api/auth /api/groups /api/sessions /api/admin
-    ├── ws.ts                        # WS：/ws — 串流 AgentEvent
+    ├── ws.ts                        # WS：/ws — SessionBus pub-sub 串流 AgentEvent
+    ├── session-bus.ts               # 全域 pub-sub：per-session 事件廣播（多 WS 連線同步）
     └── webhooks.ts                  # /webhook/{platform}
 ```
 
@@ -193,13 +191,14 @@ main.ts
 |---|---|---|---|---|---|---|
 | 1 | `baseImage` | ✅ | — | 容器映像 tag；無 custom Dockerfile 時直接使用 | `ensureAgentImage` | ❌ yaml-only |
 | 2 | `maxSessions` | ✅ | — | **單一容器內並發 SDK session 上限**（v0.3 後語意；不是容器數） | container-manager 拒絕新 session | ✅ 即時 |
-| 3 | `mountAgentsDir` | — | `false` | true 時掛 `agents/` RW 進容器（給代理人自建新代理人，例如 scaffold-agent skill） | `buildBinds` | ❌ yaml-only |
-| 4 | `resources.cpus` | — | `env.DEFAULT_CONTAINER_CPUS` | dockerode `NanoCpus` | `parseCpus` | ❌ yaml-only |
-| 5 | `resources.memory` | — | `env.DEFAULT_CONTAINER_MEMORY` | dockerode `Memory` | `parseMemory` | ❌ yaml-only |
-| 6 | `env` | — | `{}` | 額外注入容器的環境變數（與全域 LLM key 合併） | container-manager `Env` | ❌ yaml-only |
-| 7 | `volumes` | — | `[]` | 額外 bind mount 字串（dockerode `Binds` 格式 `host:guest[:ro]`） | `buildBinds` | ❌ yaml-only |
+| 3 | `resources.cpus` | — | `env.DEFAULT_CONTAINER_CPUS` | dockerode `NanoCpus` | `parseCpus` | ❌ yaml-only |
+| 4 | `resources.memory` | — | `env.DEFAULT_CONTAINER_MEMORY` | dockerode `Memory` | `parseMemory` | ❌ yaml-only |
+| 5 | `env` | — | `{}` | 額外注入容器的環境變數（與全域 LLM key 合併） | container-manager `Env` | ❌ yaml-only |
+| 6 | `volumes` | — | `[]` | 額外 bind mount 字串（dockerode `Binds` 格式 `host:guest[:ro]`） | `buildBinds` | ❌ yaml-only |
 
 > ❌ **已移除**：`idleTimeoutSeconds`（v0.4.1）— GC 實際讀全域 env `CONTAINER_IDLE_TIMEOUT_SEC`（[container-manager.ts L358](../packages/api-server/src/container/container-manager.ts)），per-group 設定無作用。yaml / schema / shared types / scaffold-agent skill 模板皆同步清除。
+
+> ❌ **已移除**：`mountAgentsDir`（v0.6）— 安全性考量，容器不應存取其他代理人的檔案。每個容器僅掛載自己的 `agents/<id>/` 為唯讀（`/workspace/agent:ro`）。若需額外可寫目錄請用 `volumes` 配置。
 
 ##### `groups[].routing.` 路由層
 
@@ -224,7 +223,6 @@ groups:
     container:
       baseImage: zeroclaw/agent-base-opencode:latest
       maxSessions: 50
-      mountAgentsDir: true
       resources:
         cpus: "1.0"
         memory: 512m
@@ -252,7 +250,6 @@ groups:
 | `routing.autoClassifierModel` | 路由層 | ✅ 即時 | `groups.reload()` | 同上 |
 | `agents[]` | 群組層 | ❌ yaml-only | 重啟 api-server | 涉及 agent 目錄掃描與映像建置 |
 | `container.baseImage` | 容器層 | ❌ yaml-only | 重啟 api-server | 改 image 需停舊容器重建 |
-| `container.mountAgentsDir` | 容器層 | ❌ yaml-only | 重啟 api-server | 容器啟動時掛載點已固定 |
 | `container.resources.*` | 容器層 | ❌ yaml-only | 重啟 api-server | CPU/Memory 需重新建立容器才能生效 |
 | `container.env` / `volumes` | 容器層 | ❌ yaml-only | 重啟 api-server | 同上 |
 
@@ -293,7 +290,7 @@ DB row  ───┘
 
 | Endpoint | 行為 |
 |---|---|
-| `GET  /api/admin/groups` | 回傳所有 group（含 `enabled=false`），附 `hasOverride` / `override` 欄位，以及 `mountAgentsDir` / `cpuLimit` / `memoryLimit` 唯讀欄位 |
+| `GET  /api/admin/groups` | 回傳所有 group（含 `enabled=false`），附 `hasOverride` / `override` 欄位，以及 `cpuLimit` / `memoryLimit` 唯讀欄位 |
 | `PATCH /api/admin/groups/:id` | body 任意子集（9 個 overridable 欄位，見 §3.3.1）→ `upsertGroupOverride` → `groups.reload()` |
 | `DELETE /api/admin/groups/:id/override` | 清空整筆 override → `reload()` |
 
@@ -315,8 +312,7 @@ DB row  ───┘
 │              │  │ (✅ 可改)                           │   │
 │              │  ├─ Container ───────────────────────-┤   │
 │              │  │ baseImage / maxSessions /           │   │
-│              │  │ mountAgentsDir / cpuLimit /         │   │
-│              │  │ memoryLimit                         │   │
+│              │  │ cpuLimit / memoryLimit              │   │
 │              │  │ (maxSessions ✅ 可改；其餘 ❌ 唯讀) │   │
 │              │  ├─ Agents ──────────────────────────-┤   │
 │              │  │ chip 清單 + 預設標記 (❌ 唯讀)      │   │
@@ -335,10 +331,10 @@ DB row  ───┘
 ### 4.1 一般訊息（同容器活著）
 
 ```
-1. WS / Webhook 收到 IncomingMessage
-2. routes/* → SessionManager.handleMessage(sessionId, msg)
+1. WS 收到 user.message { sessionId, text }
+2. ws.ts → runAgent(sessionId, msg)
 3. session.status === 'pending' → ensureContainer
-   ├─ ContainerManager.acquire(group, agent, sessionId)
+   ├─ ContainerManager.acquire(group, agent)
    │     └─ 容器存在 → 直接回傳；不存在 → launchContainer
    └─ AgentProvider.createSession → 拿到 sdkSessionId
 4. DbStore.saveMessage(userMsg)
@@ -346,11 +342,16 @@ DB row  ───┘
 5. AgentProvider.sendMessage(sdkSessionId, { text }) → AsyncIterable<AgentEvent>
 6. for await event:
      - chunk: 累積 assistantContent
-     - tool.call / tool.result: 透傳給 WS（不入庫）
+     - tool.call / tool.result: 透傳（不入庫）
      - approval.required: 透傳
      - done: DbStore.saveMessage(assistantMsg) + updateSession.messageCount +1
-   yield event 給 routes/* → 回送
+   sessionBus.publish(sessionId, event) → 所有訂閱該 session 的 WS 連線
 ```
+
+> **WS 架構（v0.6）**：採 SessionBus pub-sub 模式。WS 連線為全域（App 層建立），
+> 前端透過 `subscribe` / `unsubscribe` 訊息訂閱特定 sessionId。
+> 同一使用者多個 tab 可同時收到廣播。WS 斷線**不會中斷** agent 回覆，
+> agent 完成後訊息仍入庫；前端重連後透過 `loadMessages` API 恢復歷史。
 
 ### 4.2 容器命名與 Session 多路復用（v0.3）
 
@@ -702,12 +703,11 @@ ENV PATH=/opt/agent-tools:$PATH
 | 路徑 | 內容 | 是否持久 |
 |---|---|---|
 | `/workspace/agent` | bind mount agent 資料夾（RO） | host |
-| `/workspace/agents` | bind mount 整個 agents 目錄（RW）⁽¹⁾ | host |
 | `/root/.local/share/opencode/auth.json` | bind mount RO（Opencode only） | host |
 | `/.opencode/opencode.db` | opencode server 內部 DB | 容器內，**容器銷毀即消失** |
 | Copilot 進程記憶體 | session 狀態 | **不持久** |
 
-⁽¹⁾ 僅 `groups.yaml` 設定 `mountAgentsDir: true` 的 group 才掛載。用於代理人自建新代理人（scaffold-agent skill）。
+> 每個 agent 容器僅掛載自己的目錄（`/workspace/agent:ro`），無法存取其他代理人的檔案。
 
 → 容器是「無狀態執行單元」，所有要保留的資訊在 API server 端 DB（PostgreSQL / SQLite）。
 
@@ -788,9 +788,10 @@ ENV PATH=/opt/agent-tools:$PATH
 
 | 議題 | 決議 | 依據 |
 |---|---|---|
-| Agent 資料夾掛載 | **預設唯讀** bind mount（`:ro`）；`mountAgentsDir: true` 時額外掛載整個 `agents/` 為可寫，供代理人自建新代理人 | [container-manager.ts](../packages/api-server/src/container/container-manager.ts) |
+| Agent 資料夾掛載 | **唯讀** bind mount（`:ro`）；每個容器僅掛載自己的 `agents/<id>/` 目錄，無法存取其他代理人 | [container-manager.ts](../packages/api-server/src/container/container-manager.ts) |
 | 訊息稽核 | **全對話入庫**（`messages` 表） | §6.1 |
 | 認證 | **JWT bearer**（`jose`），webhook 各平台原生簽章 | §7 |
+| WS 安全 | `user.abort` 含 `assertOwn()` 權限檢查，禁止中斷他人 session | [ws.ts](../packages/api-server/src/routes/ws.ts) |
 
 ### 10.4 擴展性
 
@@ -871,7 +872,8 @@ ENV PATH=/opt/agent-tools:$PATH
 | `packages/api-server/src/db/index.ts` | DB factory — 依 `DB_DRIVER` env 選驅動 | §6.1 |
 | `packages/api-server/src/auth/auth-service.ts` | JWT 簽發 / 驗證、user 管理 | §7 |
 | `packages/api-server/src/routes/rest.ts` | 全部 REST endpoints | §4.6, §6.1 |
-| `packages/api-server/src/routes/ws.ts` | WebSocket `/ws` 串流推送 | §4.1 |
+| `packages/api-server/src/routes/ws.ts` | WebSocket `/ws` — SessionBus pub-sub 串流推送 | §4.1 |
+| `packages/api-server/src/routes/session-bus.ts` | 全域 pub-sub：per-session 事件廣播（多 WS 連線同步） | §4.1 |
 | `packages/api-server/src/routes/webhooks.ts` | `/webhook/{platform}` 進入點 | §4.5 |
 | `packages/api-server/src/agent/agent-detector.ts` | 資料夾掃描 → SDK 偵測 + `hasCustomDockerfile` | §3.1 |
 | `packages/api-server/src/agent/copilot-provider.ts` | Copilot JSON-RPC over TCP | §5.2 |
