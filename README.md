@@ -92,9 +92,123 @@ zeroclaw/
 - **Node.js ≥ 20**
 - **pnpm 10.x**（`npm i -g pnpm`）
 - **Docker** + **Docker Compose**（部署模式）
-- 至少一組 LLM 認證：
-  - Opencode：`opencode providers login`（推薦）
-  - 或直接設定 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`
+- 至少一組 LLM 認證（見下方「認證方式」章節）
+
+---
+
+## 🔑 LLM 認證方式
+
+ZeroClaw 支援 Opencode SDK 與 Copilot SDK 兩種 runtime，認證方式完全不同：
+
+### 總覽
+
+| SDK | 認證方式 | 需 Copilot 訂閱？ | 設定來源 |
+|---|---|---|---|
+| **Opencode** | `opencode providers login` → auth.json | 僅 `github-copilot` provider 需要 | `OPENCODE_AUTH_DIR` |
+| **Copilot** 方式 A | GitHub OAuth token（`ghu_` / `gho_` / `github_pat_`） | ✅ | `GITHUB_TOKEN` |
+| **Copilot** 方式 B | BYOK 自帶金鑰（完全繞過 GitHub） | ❌ | `OPENAI_API_KEY` + `BYOK_*` |
+| **Opencode** 備用 | BYOK（同上，env 注入容器） | ❌ | `ANTHROPIC_API_KEY` 或 `OPENAI_API_KEY` |
+
+### Opencode SDK 認證（推薦）
+
+```bash
+# 1. 安裝 opencode CLI
+npm i -g opencode
+
+# 2. 登入 provider（互動式 OAuth / 輸入 API key）
+opencode providers login
+# → 寫入 ~/.local/share/opencode/auth.json
+
+# 3. .env 設定指向 auth.json 所在目錄
+OPENCODE_AUTH_DIR=C:\Users\CIM\.local\share\opencode   # Windows
+# OPENCODE_AUTH_DIR=~/.local/share/opencode             # Linux/macOS
+```
+
+容器啟動時會將 `auth.json` **唯讀**掛載到容器內，opencode server 自動讀取。
+
+**可選 model 覆蓋**（不設則走 `opencode.json` 內定義）：
+```dotenv
+OPENCODE_MODEL_ID=anthropic/claude-sonnet-4-20250514
+OPENCODE_PROVIDER_ID=anthropic
+# 格式：provider/model 或分開設定
+```
+
+### Copilot SDK 認證
+
+Copilot SDK 有兩種模式，**擇一即可**：
+
+#### 模式 A：GitHub Token（使用 Copilot API）
+
+需要 GitHub Copilot 訂閱（Individual / Business / Enterprise）。
+
+```dotenv
+GITHUB_TOKEN=ghu_xxxxxxxxxxxx
+```
+
+**⚠️ 支援的 token 格式：**
+| 前綴 | 類型 | 支援 |
+|---|---|---|
+| `ghu_` | GitHub App user token（OAuth device flow） | ✅ |
+| `gho_` | OAuth user access token | ✅ |
+| `github_pat_` | Fine-grained personal access token | ✅ |
+| `ghp_` | Classic PAT | ❌ **不支援** |
+
+取得方式（Fine-grained PAT）：
+1. GitHub → Settings → Developer settings → [Fine-grained tokens](https://github.com/settings/personal-access-tokens/new)
+2. Token name: `zeroclaw-copilot`
+3. Permission: **Account permissions → GitHub Copilot → Read-only**
+4. Generate → 複製 `github_pat_...` 填入 `.env`
+
+#### 模式 B：BYOK（自帶 API Key，不需 Copilot 訂閱）
+
+設定 `OPENAI_API_KEY` 即啟用 BYOK，Copilot SDK 將直接呼叫你指定的 LLM endpoint。
+
+```dotenv
+# --- OpenAI ---
+OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxx
+BYOK_MODEL=gpt-4o
+BYOK_BASE_URL=https://api.openai.com/v1
+
+# --- 或 Anthropic（透過 OpenAI-compatible proxy）---
+OPENAI_API_KEY=sk-ant-xxxxxxxxxxxxx
+BYOK_MODEL=claude-sonnet-4-20250514
+BYOK_BASE_URL=https://api.anthropic.com/v1
+
+# --- 或 Azure OpenAI ---
+OPENAI_API_KEY=your-azure-key
+BYOK_MODEL=gpt-5-mini
+BYOK_BASE_URL=https://your-resource.openai.azure.com/openai/v1/
+
+# --- 或本地 Ollama ---
+OPENAI_API_KEY=ollama
+BYOK_MODEL=llama3
+BYOK_BASE_URL=http://host.docker.internal:11434/v1
+```
+
+> **注意**：BYOK 模式下 `GITHUB_TOKEN` 會被忽略。Copilot SDK 仍需 CLI subprocess 但不向 GitHub API 認證。
+
+### 認證優先順序
+
+```
+容器啟動
+  ├─ Opencode: auth.json (bind mount) → opencode server 讀取
+  │            └─ 備用: env 中的 ANTHROPIC_API_KEY / OPENAI_API_KEY
+  │
+  └─ Copilot:  OPENAI_API_KEY 存在？
+                ├─ YES → BYOK 模式（用 BYOK_MODEL + BYOK_BASE_URL）
+                └─ NO  → GITHUB_TOKEN 傳入 CopilotClient
+```
+
+### 常見錯誤
+
+| 錯誤訊息 | 原因 | 解法 |
+|---|---|---|
+| `Session was not created with authentication info` | `GITHUB_TOKEN` 未設或為 `ghp_` 格式 | 換成 `github_pat_` 或啟用 BYOK |
+| `ghp_ classic PATs are NOT supported` | Classic PAT 不被 Copilot SDK 接受 | 改用 Fine-grained PAT 或 BYOK |
+| `No GITHUB_TOKEN and no BYOK provider` | 兩者都沒設 | 至少設一個 |
+| Opencode `auth error` | `auth.json` 過期或路徑錯 | 重新 `opencode providers login` |
+
+---
 
 ### 1. 取得程式碼
 
@@ -108,7 +222,7 @@ pnpm install
 
 ```bash
 cp .env.example .env
-# 編輯 .env 填入 JWT_SECRET 與 LLM 金鑰
+# 編輯 .env（參考上方「LLM 認證方式」）
 ```
 
 關鍵變數：
@@ -117,7 +231,8 @@ cp .env.example .env
 |---|---|---|
 | `JWT_SECRET` | ✅ | 至少 32 字元的隨機字串 |
 | `OPENCODE_AUTH_DIR` | Opencode 用 | 宿主機 `auth.json` 所在目錄（先執行 `opencode providers login`）|
-| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | 二選一 | 直接設金鑰 |
+| `GITHUB_TOKEN` | Copilot 用 | `github_pat_` 或 `ghu_` 格式（**非** `ghp_`） |
+| `OPENAI_API_KEY` + `BYOK_*` | BYOK 用 | 設定後 Copilot SDK 繞過 GitHub 直連 LLM |
 | `HOST_AGENTS_DIR` | Docker 部署用 | 宿主機 `agents/` 絕對路徑（讓 API server 能掛載到子容器）|
 | `DB_DRIVER` | — | `postgres`（預設）或 `sqlite` |
 | `DATABASE_URL` | PostgreSQL 用 | 連線字串，Docker 內預設 `postgres://zeroclaw:zeroclaw-dev@zeroclaw-postgres:5432/zeroclaw` |
