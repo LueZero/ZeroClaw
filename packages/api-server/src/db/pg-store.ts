@@ -506,6 +506,31 @@ export async function createPgDbStore(connectionString: string): Promise<DbStore
       return out;
     },
 
+    async getSessionDiagnostics() {
+      const rows = await q<Record<string, unknown>>(
+        `SELECT s.*,
+                COALESCE(mc.total, 0)::int AS actual_message_count,
+                COALESCE(mc.user_count, 0)::int AS user_messages,
+                COALESCE(mc.assistant_count, 0)::int AS assistant_messages
+         FROM sessions s
+         LEFT JOIN (
+           SELECT session_id,
+                  COUNT(*)::int AS total,
+                  COUNT(*) FILTER (WHERE role = 'user')::int AS user_count,
+                  COUNT(*) FILTER (WHERE role = 'assistant')::int AS assistant_count
+           FROM messages
+           GROUP BY session_id
+         ) mc ON mc.session_id = s.session_id
+         ORDER BY s.last_message_at DESC`,
+      );
+      return rows.map((row) => ({
+        session: rowToSession(row),
+        actualMessageCount: row['actual_message_count'] as number,
+        userMessages: row['user_messages'] as number,
+        assistantMessages: row['assistant_messages'] as number,
+      }));
+    },
+
     // ---- users ----
     async upsertUser(u) {
       await pool.query(

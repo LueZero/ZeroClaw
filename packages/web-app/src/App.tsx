@@ -1,4 +1,4 @@
-import { Component, type ReactNode } from 'react';
+import { Component, type ReactNode, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useStore } from './store';
 import { LoginPage } from './pages/LoginPage';
@@ -31,6 +31,12 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 export function App() {
   const token = useStore((s) => s.token);
   const role = useStore((s) => s.role);
+  const connectWs = useStore((s) => s.connectWs);
+
+  // Global WS connection — stays alive across all page navigations
+  useEffect(() => {
+    if (token) connectWs();
+  }, [token, connectWs]);
 
   if (!token) return <LoginPage />;
 

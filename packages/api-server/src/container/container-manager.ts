@@ -1,10 +1,10 @@
-/**
- * ContainerManager ??蝞∠? Docker 摰孵??望?
+﻿/**
+ * ContainerManager — 管理 Docker 容器生命週期
  *
- * v0.3: 銝??(group ? agent) ??**?臭?銝??* ?曹澈摰孵??
- * 摰孵?批?輯?憭?SDK session嚗ultiplexing嚗?
- * `maxSessions` = 摰孵?扳?憭?SDK session ?賊???
- * API server ???? DB ?亦恣隞?瘣餌?摰孵嚗ontainerPool persistence嚗?
+ * v0.3: 每組 (group, agent) 對應一個共用容器，
+ * 容器內可複用多個 SDK session（multiplexing）。
+ * `maxSessions` = 容器內最大同時 SDK session 數量上限。
+ * API server 啟動時從 DB 恢復已存在的容器（ContainerPool persistence）。
  */
 
 import Docker from 'dockerode';
@@ -30,7 +30,7 @@ interface ContainerEntry {
   instance: ContainerInstance;
   provider: AgentProvider;
   docker: Docker.Container;
-  /** ?嗅?????SDK session ID ?? */
+  /** SDK session ID */
   sdkSessions: Set<string>;
 }
 
@@ -39,31 +39,31 @@ function keyOf(groupId: string, agentId: string): string {
 }
 
 export interface ContainerManager {
-  /** ??嚗???嚗?group, agent) ?曹澈摰孵嚗???entry */
+  /** 取得（或啟動）(group, agent) 對應的共用容器，回傳 entry */
   acquire(group: GroupConfig, agent: AgentMetadata): Promise<ContainerEntry>;
-  /** ?? containerId ?郊?交 entry */
+  /** 依 containerId 查找對應 entry */
   findEntry(containerId: string): ContainerEntry | undefined;
-  /** ???捆??*/
+  /** 列出所有容器 */
   list(): ContainerInstance[];
-  /** 撘瑕?迫銝?捆??*/
+  /** 停止指定容器 */
   stop(containerId: string): Promise<void>;
-  /** ? SDK session 撌脤??摰孵 */
+  /** 將 SDK session 掛載到容器 */
   attachSession(containerId: string, sdkSessionId: string): void;
-  /** ? SDK session 撌脣?摰孵? */
+  /** 將 SDK session 從容器卸載 */
   detachSession(containerId: string, sdkSessionId: string): void;
-  /** ?? GC嚗dle ?嚗? ?亙熒?? */
+  /** 啟動 GC（idle 時自動清理容器） */
   startGc(): void;
-  /** ????摰孵嚗ession ?瑞宏??SessionManager 鞎痊嚗?*/
+  /** 重啟容器（session 遷移由 SessionManager 處理） */
   restart(containerId: string, group: GroupConfig, agent: AgentMetadata): Promise<ContainerEntry>;
-  /** 敺??葉?賊?捆??entry嚗?閮憭望?嚗?撖阡? stop??*/
+  /** 標記容器為無效並移除 entry（僅從記憶體清除，不執行 stop） */
   invalidate(containerId: string): void;
-  /** 敺?DB ?亦恣????瘣餌?摰孵 */
+  /** 從 DB 恢復已存在的執行中容器 */
   adoptFromDb(): Promise<void>;
-  /** 閮 unhealthy ? */
+  /** 監聽 unhealthy 事件 */
   onUnhealthy(handler: (cid: string, groupId: string, agentId: string) => void): void;
   /** 強制重新 build agent image 並重啟所有使用該 image 的容器 (T-6) */
   rebuildImage(agent: AgentMetadata, group: GroupConfig): Promise<void>;
-  /** ????皞?*/
+  /** 釋放所有資源 */
   dispose(): Promise<void>;
 }
 
@@ -83,9 +83,9 @@ export function createContainerManager(
   const docker = new Docker(
     env.DOCKER_SOCKET ? { socketPath: env.DOCKER_SOCKET } : undefined,
   );
-  /** key = groupId::agentId ???桐?摰孵嚗er (group, agent)嚗?*/
+  /** key = groupId::agentId → 共用容器，per (group, agent) 一個 */
   const containers = new Map<string, ContainerEntry>();
-  /** ?? (group, agent) ?脰?銝剔??? promise */
+  /** 防止 (group, agent) 同時啟動多次的 inflight promise */
   const inflight = new Map<string, Promise<ContainerEntry>>();
   let gcTimer: NodeJS.Timeout | null = null;
   let healthTimer: NodeJS.Timeout | null = null;
@@ -102,21 +102,21 @@ export function createContainerManager(
   ): Promise<ContainerEntry> {
     const key = keyOf(group.id, agent.id);
 
-    // 撌脫? running 摰孵 ??敹恍?probe
+    // 檢查是否有 running 容器，做 readiness probe
     const existing = containers.get(key);
     if (existing && existing.instance.status === 'running') {
       try {
         const ok = await existing.provider.isReady();
         if (ok) return existing;
-        logger.warn({ containerId: existing.instance.containerId }, 'Cached entry failed isReady ??re-launching');
+        logger.warn({ containerId: existing.instance.containerId }, 'Cached entry failed isReady — re-launching');
       } catch (err) {
-        logger.warn({ err, containerId: existing.instance.containerId }, 'Cached entry threw on isReady ??invalidating');
+        logger.warn({ err, containerId: existing.instance.containerId }, 'Cached entry threw on isReady — invalidating');
       }
       existing.instance.status = 'unhealthy';
       void invalidateInternal(existing.instance.containerId);
     }
 
-    // 銝衣??
+    // 防止重複啟動
     const pending = inflight.get(key);
     if (pending) return pending;
 
@@ -139,7 +139,7 @@ export function createContainerManager(
     group: GroupConfig,
     agent: AgentMetadata,
   ): Promise<ContainerEntry> {
-    // 瘙箏??批??zeroclaw-{group}-{agent}嚗? (group, agent) ?臭?嚗?
+    // 命名規則：zeroclaw-{group}-{agent}，每 (group, agent) 一個容器
     const containerId = `zeroclaw-${sanitizeDockerName(group.id)}-${sanitizeDockerName(agent.id)}`;
     const imageTag = await ensureAgentImage(group, agent);
 
@@ -148,7 +148,7 @@ export function createContainerManager(
       ? `${hostAgentsDir}\\${agent.id}`
       : `${hostAgentsDir}/${agent.id}`;
 
-    // ?岫?亦恣?Ｘ???摰孵
+    // 嘗試認養已存在的容器
     let container: Docker.Container | null = null;
     let adopted = false;
     try {
@@ -196,7 +196,6 @@ export function createContainerManager(
         agent.sdk,
         env.OPENCODE_AUTH_DIR,
         group.container.volumes,
-        group.container.mountAgentsDir ? hostAgentsDir : undefined,
       );
 
       try {
@@ -222,7 +221,7 @@ export function createContainerManager(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (/already in use|Conflict/i.test(msg)) {
-          logger.info({ containerId }, 'Container created concurrently ??adopting');
+          logger.info({ containerId }, 'Container created concurrently — adopting');
           const fresh = await docker.listContainers({
             all: true,
             filters: { name: [`^/${containerId}$`] },
@@ -470,7 +469,7 @@ export function createContainerManager(
     for (const ci of persisted) {
       const isRunning = runningNames.has(`/${ci.containerId}`);
       if (!isRunning) {
-        logger.info({ containerId: ci.containerId }, 'Persisted container not running ??removing from DB');
+        logger.info({ containerId: ci.containerId }, 'Persisted container not running — removing from DB');
         try { await db.removeContainer(ci.containerId); } catch { /* ignore */ }
         continue;
       }
@@ -547,8 +546,6 @@ export function createContainerManager(
   };
 }
 
-// ??????????????????????????????????????????????????????
-
 async function waitForReady(provider: AgentProvider, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -558,9 +555,8 @@ async function waitForReady(provider: AgentProvider, timeoutMs: number): Promise
   return false;
 }
 
-function buildBinds(agentMount: string, sdk: string, opencodeAuthDir: string | undefined, extra?: string[], hostAgentsDir?: string): string[] {
+function buildBinds(agentMount: string, sdk: string, opencodeAuthDir: string | undefined, extra?: string[]): string[] {
   const binds = [`${agentMount}:/workspace/agent:ro`];
-  if (hostAgentsDir) binds.push(`${hostAgentsDir}:/workspace/agents`);
   if (sdk === 'opencode' && opencodeAuthDir) {
     const base = opencodeAuthDir.replace(/[\\/]$/, '');
     const sep = opencodeAuthDir.includes('\\') ? '\\' : '/';

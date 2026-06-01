@@ -5,6 +5,8 @@
  *
  * 客戶端訊息：WsClientMessage
  * 服務端訊息：WsServerMessage
+ *
+ * 使用 SessionBus 廣播事件，支持多使用者/多分頁訂閱同一 session。
  */
 
 import type { FastifyInstance, FastifyRequest } from 'fastify';
@@ -17,11 +19,13 @@ import type {
 import { agentEventToWs, Errors } from '@zeroclaw/shared';
 import type { AuthService } from '../auth/auth-service.js';
 import type { SessionManager } from '../session/session-manager.js';
+import type { SessionBus } from './session-bus.js';
 
 interface RegisterWsDeps {
   logger: Logger;
   auth: AuthService;
   sessions: SessionManager;
+  sessionBus: SessionBus;
 }
 
 export async function registerWebSocket(
@@ -42,8 +46,14 @@ export async function registerWebSocket(
       return;
     }
 
-    const subscriptions = new Set<string>();
+    const { sessionBus } = deps;
+    const subscribedSessions = new Set<string>();
     const aborts = new Map<string, AbortController>();
+
+    // Per-socket subscriber callback — routes bus events to this socket
+    const subscriber = (msg: WsServerMessage): void => {
+      if (socket.readyState === 1) socket.send(JSON.stringify(msg));
+    };
 
     function safeSend(msg: WsServerMessage): void {
       if (socket.readyState === 1) socket.send(JSON.stringify(msg));
@@ -70,21 +80,27 @@ export async function registerWebSocket(
     });
 
     socket.on('close', () => {
-      for (const ac of aborts.values()) ac.abort();
+      // Mark all in-flight operations as disconnected (but DON'T abort them —
+      // let agent processing complete so responses are saved to DB).
+      // Only explicit user.abort should cancel agent work.
       aborts.clear();
-      subscriptions.clear();
+      // Unsubscribe this socket from all sessions in the bus
+      sessionBus.unsubscribeAll(subscriber);
+      subscribedSessions.clear();
     });
 
     async function dispatch(msg: WsClientMessage): Promise<void> {
       switch (msg.type) {
         case 'subscribe': {
           await assertOwn(msg.sessionId);
-          subscriptions.add(msg.sessionId);
+          subscribedSessions.add(msg.sessionId);
+          sessionBus.subscribe(msg.sessionId, subscriber);
           safeSend({ type: 'subscribed', sessionId: msg.sessionId });
           return;
         }
         case 'unsubscribe': {
-          subscriptions.delete(msg.sessionId);
+          subscribedSessions.delete(msg.sessionId);
+          sessionBus.unsubscribe(msg.sessionId, subscriber);
           safeSend({ type: 'unsubscribed', sessionId: msg.sessionId });
           return;
         }
@@ -94,6 +110,7 @@ export async function registerWebSocket(
           return;
         }
         case 'user.abort': {
+          await assertOwn(msg.sessionId);
           aborts.get(msg.sessionId)?.abort();
           await deps.sessions.abort(msg.sessionId);
           return;
@@ -144,8 +161,11 @@ export async function registerWebSocket(
     async function runAgent(
       msg: Extract<WsClientMessage, { type: 'user.message' }>,
     ): Promise<void> {
-      // 中止舊的（如有）
-      aborts.get(msg.sessionId)?.abort();
+      // 中止舊的（如有）— only if user sends a new message to same session before old completes
+      const prevAc = aborts.get(msg.sessionId);
+      if (prevAc) {
+        try { prevAc.abort(); } catch { /* ignore */ }
+      }
       const ac = new AbortController();
       aborts.set(msg.sessionId, ac);
 
@@ -160,16 +180,22 @@ export async function registerWebSocket(
       };
 
       try {
+        // Pass signal to session-manager so explicit user.abort can cancel.
+        // WS disconnect no longer aborts the signal (handled in socket.on('close')).
         for await (const event of deps.sessions.handleMessage(
           msg.sessionId,
           incoming,
           ac.signal,
         )) {
-          safeSend(agentEventToWs(msg.sessionId, event));
+          // Broadcast to ALL subscribers of this session (multi-tab / multi-user)
+          sessionBus.publish(msg.sessionId, agentEventToWs(msg.sessionId, event));
         }
       } catch (e) {
+        // AbortError is expected when user explicitly aborts — ignore silently
+        if (e instanceof DOMException && e.name === 'AbortError') return;
+        if (e instanceof Error && e.name === 'AbortError') return;
         const err = e as Error;
-        safeSend({
+        sessionBus.publish(msg.sessionId, {
           type: 'agent.error',
           sessionId: msg.sessionId,
           error: { code: 'INTERNAL_ERROR', message: err.message },

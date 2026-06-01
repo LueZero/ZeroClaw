@@ -33,6 +33,7 @@ BYOK_BASE_URL=https://api.openai.com/v1
 ## 5. WebSocket 連不上
 - URL 須含 token：`ws://localhost:3000/ws?token=<jwt>`
 - 檢查 `WEB_ORIGIN` env 對應前端 origin
+- WS 斷線後不會中斷 agent 回覆（pub-sub 機制），重連後自動載入歷史
 
 ## 6. 跨容器後失憶
 - 已知限制：history replay 未實作
@@ -42,3 +43,8 @@ BYOK_BASE_URL=https://api.openai.com/v1
 - 確認資料夾在 `agents/<id>/`
 - `groups.yaml` 該 group 的 `agents` 清單有列出 `<id>`
 - 重啟 API server（或等 yaml watcher 熱重載）
+
+## 8. 容器隔離
+- 每個 agent 容器僅掛載 `/workspace/agent:ro`（唯讀）
+- 不能存取其他代理人的檔案
+- 若需讓代理人寫入檔案，請使用 `volumes` 配置額外可寫掛載點

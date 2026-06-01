@@ -250,7 +250,6 @@ export async function registerRoutes(
       defaultAgent: g.defaultAgent,
       baseImage: g.container.baseImage,
       maxSessions: g.container.maxSessions,
-      mountAgentsDir: g.container.mountAgentsDir ?? false,
       cpuLimit: g.container.resources?.cpus ?? null,
       memoryLimit: g.container.resources?.memory ?? null,
       routingMode: g.routing.mode,
@@ -511,12 +510,15 @@ export async function registerRoutes(
 
     const allUsers = await deps.db.listAllUsers();
     const userMap = new Map(allUsers.map((u) => [u.id, u]));
-    const allSessions = await deps.db.listAllSessions();
 
-    const sessions = await Promise.all(allSessions.map(async (s) => {
-      const actual = await deps.db.countMessages(s.sessionId);
-      const byRole = await deps.db.countMessagesByRole(s.sessionId);
+    // Single aggregated query — avoids N+1 pool exhaustion that previously
+    // caused API to become unresponsive when navigating to admin during chat.
+    const diagRows = await deps.db.getSessionDiagnostics();
+
+    const sessions = diagRows.map((d) => {
+      const s = d.session;
       const dbCount = s.messageCount;
+      const actual = d.actualMessageCount;
       const missing = dbCount - actual;
       const u = userMap.get(s.userId);
       return {
@@ -534,12 +536,12 @@ export async function registerRoutes(
         lastMessageAt: s.lastMessageAt.toISOString(),
         dbMessageCount: dbCount,
         actualMessageCount: actual,
-        userMessages: byRole.user,
-        assistantMessages: byRole.assistant,
+        userMessages: d.userMessages,
+        assistantMessages: d.assistantMessages,
         missing,
         integrityOk: missing === 0,
       };
-    }));
+    });
 
     // 摘要
     const summary = {

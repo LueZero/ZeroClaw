@@ -44,6 +44,10 @@ OPENAI_API_KEY=sk-...        # 或 ANTHROPIC_API_KEY
 - 預設管理員：見 `packages/api-server/scripts/seed.ts`
 
 ## 下一步
-- 想新增代理人 → `agents/<id>/` 建資料夾，編輯 `AGENTS.md`，再到 `groups.yaml` 註冊
+- 想新增代理人 → `agents/<id>/` 建資料夾，編輯 `AGENTS.md` + `opencode.json`，再到 `groups.yaml` 註冊
 - 想了解事件流 → 讀 `docs/ARCHITECTURE.md` §4
 - 想接 Telegram/Discord → 讀 `docs/ARCHITECTURE.md` §3 + `messaging/`
+
+## 注意事項
+- 容器內只能存取自己的 agent 目錄（`/workspace/agent:ro` 唯讀）
+- WS 斷線不會中斷 agent 回覆，重連後自動載入歷史訊息

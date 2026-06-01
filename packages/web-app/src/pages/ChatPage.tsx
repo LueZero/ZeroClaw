@@ -14,7 +14,6 @@ export function ChatPage() {
   const selectSession = useStore((s) => s.selectSession);
   const loadGroups = useStore((s) => s.loadGroups);
   const loadSessions = useStore((s) => s.loadSessions);
-  const connectWs = useStore((s) => s.connectWs);
   const setToken = useStore((s) => s.setToken);
   const currentSessionId = useStore((s) => s.currentSessionId);
   const sessions = useStore((s) => s.sessions);
@@ -29,8 +28,7 @@ export function ChatPage() {
   useEffect(() => {
     loadGroups();
     loadSessions();
-    connectWs();
-  }, [loadGroups, loadSessions, connectWs]);
+  }, [loadGroups, loadSessions]);
 
   // URL 中有 sessionId → 自動選取
   useEffect(() => {

@@ -12,7 +12,6 @@ groups:
     container:
       baseImage: zeroclaw/agent-base-opencode:latest
       maxSessions: 50
-      mountAgentsDir: true
       resources:
         cpus: "1.0"
         memory: 512m
@@ -31,7 +30,6 @@ groups:
     container:
       baseImage: zeroclaw/agent-base-copilot:latest
       maxSessions: 30
-      mountAgentsDir: true
       resources:
         cpus: "2.0"
         memory: 1g

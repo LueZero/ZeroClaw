@@ -31,6 +31,7 @@ import { createTeamsAdapter } from './messaging/teams-adapter.js';
 import { registerRoutes } from './routes/rest.js';
 import { registerWebhooks } from './routes/webhooks.js';
 import { registerWebSocket } from './routes/ws.js';
+import { createSessionBus } from './routes/session-bus.js';
 
 export async function buildApp() {
   const env = loadEnv();
@@ -183,10 +184,12 @@ export async function buildApp() {
     db,
     pairing,
   });
+  const sessionBus = createSessionBus();
   await registerWebSocket(app, {
     logger: logger.child({ mod: 'ws' }),
     auth,
     sessions,
+    sessionBus,
   });
 
   // ── SPA 靜態檔案服務（production 用）──
@@ -247,6 +250,22 @@ export async function buildApp() {
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+
+  // Safety net: suppress AbortError rejections caused by client disconnects
+  // during streaming. The primary handling is in ws.ts + opencode-provider.ts,
+  // but async generator propagation in Node.js can still produce unhandled
+  // rejections due to microtask timing.
+  process.on('unhandledRejection', (reason) => {
+    if (
+      reason instanceof DOMException && reason.name === 'AbortError' ||
+      reason instanceof Error && reason.name === 'AbortError'
+    ) {
+      logger.debug('Suppressed AbortError from disconnected client');
+      return;
+    }
+    logger.error({ err: reason }, 'Unhandled rejection');
+    process.exit(1);
+  });
 
   return { app, env, logger };
 }

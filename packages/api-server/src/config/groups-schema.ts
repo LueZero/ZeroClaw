@@ -5,7 +5,6 @@ const ContainerConfigSchema = z.object({
   maxSessions: z.number().int().positive().max(1000),
   env: z.record(z.string()).optional(),
   volumes: z.array(z.string()).optional(),
-  mountAgentsDir: z.boolean().optional(),
   resources: z
     .object({
       cpus: z.string().optional(),

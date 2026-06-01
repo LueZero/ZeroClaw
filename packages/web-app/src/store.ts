@@ -137,7 +137,6 @@ export interface AdminGroupRecord {
   defaultAgent?: string;
   baseImage: string;
   maxSessions: number;
-  mountAgentsDir: boolean;
   cpuLimit: string | null;
   memoryLimit: string | null;
   routingMode: 'explicit' | 'auto' | 'round-robin';
@@ -307,9 +306,30 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async selectSession(id) {
+    const prevId = get().currentSessionId;
+    const ws = get().ws;
+    // Unsubscribe from previous session
+    if (prevId && prevId !== id && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'unsubscribe', sessionId: prevId } as WsClientMessage));
+    }
     set({ currentSessionId: id });
+
+    // If re-selecting the same session (e.g. navigating back from another page) and
+    // there's an active streaming message, skip loadMessages to avoid losing live chunks.
+    const existing = get().messages[id];
+    if (prevId === id && existing?.some((m) => m.id === '__streaming__')) {
+      // Already receiving live stream — just ensure subscription is active
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'subscribe', sessionId: id } as WsClientMessage));
+      }
+      return;
+    }
+
     await get().loadMessages(id);
-    get().ws?.send(JSON.stringify({ type: 'subscribe', sessionId: id } as WsClientMessage));
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'subscribe', sessionId: id } as WsClientMessage));
+    }
+    // If WS isn't open yet, onopen handler will auto-subscribe
   },
 
   async loadMessages(id) {
@@ -345,6 +365,18 @@ export const useStore = create<State>((set, get) => ({
     if (!token) return;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${proto}//${location.host}/ws?token=${encodeURIComponent(token)}`);
+    ws.onopen = () => {
+      // Re-subscribe to current session after reconnect so streaming events resume
+      const sid = get().currentSessionId;
+      if (sid) {
+        // Load persisted messages first, then subscribe for live events
+        void get().loadMessages(sid).then(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'subscribe', sessionId: sid } as WsClientMessage));
+          }
+        });
+      }
+    };
     ws.onmessage = (ev) => {
       const msg = JSON.parse(String(ev.data)) as WsServerMessage;
       handleWsMessage(msg, set, get);

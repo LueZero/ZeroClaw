@@ -129,6 +129,14 @@ export interface DbStore {
   upsertGroupOverride(o: GroupOverride): Promise<void>;
   deleteGroupOverride(groupId: string): Promise<void>;
 
+  // diagnostics (aggregated — avoids N+1 pool exhaustion)
+  getSessionDiagnostics(): Promise<Array<{
+    session: SessionRecord;
+    actualMessageCount: number;
+    userMessages: number;
+    assistantMessages: number;
+  }>>;
+
   // admin
   close(): Promise<void>;
 }
@@ -698,6 +706,31 @@ export function createDbStore(path: string): DbStore {
         else if (r.role === 'assistant') out.assistant = r.n;
       }
       return out;
+    },
+
+    async getSessionDiagnostics() {
+      const rows = db.prepare(`
+        SELECT s.*,
+               COALESCE(mc.total, 0) AS actual_message_count,
+               COALESCE(mc.user_count, 0) AS user_messages,
+               COALESCE(mc.assistant_count, 0) AS assistant_messages
+        FROM sessions s
+        LEFT JOIN (
+          SELECT session_id,
+                 COUNT(*) AS total,
+                 SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END) AS user_count,
+                 SUM(CASE WHEN role = 'assistant' THEN 1 ELSE 0 END) AS assistant_count
+          FROM messages
+          GROUP BY session_id
+        ) mc ON mc.session_id = s.session_id
+        ORDER BY s.last_message_at DESC
+      `).all() as Array<Record<string, unknown>>;
+      return rows.map((row) => ({
+        session: rowToSession(row),
+        actualMessageCount: (row['actual_message_count'] as number) ?? 0,
+        userMessages: (row['user_messages'] as number) ?? 0,
+        assistantMessages: (row['assistant_messages'] as number) ?? 0,
+      }));
     },
 
     async upsertUser(u) {

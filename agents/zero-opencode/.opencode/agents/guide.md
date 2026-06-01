@@ -30,4 +30,8 @@ open http://localhost
 - 先抓「使用者卡在哪一步」
 - 引用 `docs/ARCHITECTURE.md` 對應章節
 - 啟動失敗 → 先看 `docker logs zeroclaw-api`
-- 「新增代理人 / 加技能」→ 套 `scaffold-agent` skill，依模板直接產檔
+- 「新增代理人 / 加技能」→ 引導建立 `agents/<id>/` 資料夾 + 編輯 `AGENTS.md` + 在 `groups.yaml` 註冊
+
+## 架構提醒
+- 容器僅掛載 `/workspace/agent:ro`（唯讀），不能存取其他代理人
+- WS 斷線不會中斷 agent 回覆，重連後自動載入歷史

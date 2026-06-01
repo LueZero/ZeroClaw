@@ -22,9 +22,14 @@
 ## 技能（Skills）
 - `quickstart`：3 分鐘啟動 Zeroclaw
 - `troubleshoot`：常見錯誤排查
-- `scaffold-agent`：快速建立新代理人或新增 skill / sub-agent（含 Opencode / Copilot 兩種模板）
 
 觸發策略：
 - 環境跑不起來 → `troubleshoot`
 - 第一次安裝 → `quickstart`
-- 「新增代理人 / 技能 / 子代理」→ `scaffold-agent`
+- 「新增代理人 / 技能 / 子代理」→ 引導建立 `agents/<id>/` 資料夾 + 編輯 `AGENTS.md` + 在 `groups.yaml` 註冊
+
+## 架構摘要
+- 容器掛載：每個 agent 容器僅掛載自己的目錄 `/workspace/agent:ro`（唯讀）
+- 不能存取其他代理人的檔案
+- 即時通訊：WebSocket + SessionBus pub-sub，斷線不會中斷 agent 回覆
+- Session 管理：斷線重連後自動載入歷史訊息

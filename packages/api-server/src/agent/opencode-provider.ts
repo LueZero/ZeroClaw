@@ -112,6 +112,9 @@ export class OpencodeAgentProvider implements AgentProvider {
         },
       );
     } catch (err) {
+      // AbortError: client disconnected — end the generator cleanly
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      if (err instanceof Error && err.name === 'AbortError') return;
       // Container unavailable (stopped, network error, etc.)
       const msg = err instanceof Error ? err.message : String(err);
       throw Errors.containerLaunchFailed(`Agent container unreachable: ${msg}`);
@@ -222,7 +225,16 @@ async function* parseSseStream(
   try {
     while (true) {
       if (signal?.aborted) break;
-      const { done, value } = await reader.read();
+      let done: boolean;
+      let value: Uint8Array | undefined;
+      try {
+        ({ done, value } = await reader.read());
+      } catch (err) {
+        // AbortError from reader.cancel() — normal client disconnect
+        if (err instanceof DOMException && err.name === 'AbortError') break;
+        if (err instanceof Error && err.name === 'AbortError') break;
+        throw err;
+      }
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
 

@@ -356,10 +356,6 @@ function GroupDetail(props: {
               </div>
             </div>
             <div className="ga-row">
-              <div className="ga-field" style={{ flex: '0 0 auto' }}>
-                <label className="ga-label">Mount Agents Dir <span className="ga-readonly-badge">yaml-only</span></label>
-                <div className="ga-readonly-field">{g.mountAgentsDir ? 'true' : 'false'}</div>
-              </div>
               <div className="ga-field" style={{ flex: '0 0 140px' }}>
                 <label className="ga-label">CPU Limit <span className="ga-readonly-badge">yaml-only</span></label>
                 <div className="ga-readonly-field">{g.cpuLimit ?? '—'}</div>

@@ -58,7 +58,6 @@ export interface ContainerConfig {
   maxSessions: number;
   env?: Record<string, string>;
   volumes?: string[];
-  mountAgentsDir?: boolean;
   resources?: {
     cpus?: string;
     memory?: string;

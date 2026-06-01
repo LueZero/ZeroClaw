@@ -34,7 +34,13 @@ docker logs zeroclaw-api --tail 200
 ## 5. WebSocket 連不上
 - 前端打的 URL 是否含 token：`ws://localhost:3000/ws?token=<jwt>`
 - API server CORS：檢查 `WEB_ORIGIN` env
+- WS 斷線後不會中斷 agent 回覆（pub-sub 機制），重連後會自動載入歷史
 
 ## 6. 對話跨容器後失憶
 - 已知限制（History replay 未實作）
 - 暫解：在容器存活期間完成單次任務；或調高 `CONTAINER_IDLE_TIMEOUT_SEC`
+
+## 7. 容器隔離
+- 每個 agent 容器僅掛載 `/workspace/agent:ro`（唯讀）
+- 不能存取其他代理人的檔案
+- 若需讓代理人寫入檔案，請使用 `volumes` 配置額外可寫掛載點
